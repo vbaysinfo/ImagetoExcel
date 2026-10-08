@@ -295,6 +295,8 @@ export function SketchToExcelApp() {
   /* ------------------------------- Review -------------------------------- */
 
   const profile = info?.profile ?? null;
+  /** At least one row has something worth writing to Excel. */
+  const hasData = items.some((it) => it.item.trim() || it.width.value !== null || it.height.value !== null || it.depth.value !== null);
   const blockers = useMemo(() => (profile ? findBlockers(items, profile.config) : []), [items, profile]);
   const colorOf = useCallback((id: string) => ITEM_COLORS[Math.max(0, items.findIndex((i) => i.id === id)) % ITEM_COLORS.length], [items]);
 
@@ -342,6 +344,10 @@ export function SketchToExcelApp() {
    */
   const generate = async (source: "auto" | "user" = "user") => {
     if (!profile || !items.length) return;
+    if (!hasData) {
+      setGenerateError("There is nothing to export yet — no measurements have been read or entered. Analyse a drawing or type the values into the rows first.");
+      return;
+    }
     const draft = blockers.length > 0;
     setGenerating(true);
     setGenerateError(null);
@@ -387,6 +393,7 @@ export function SketchToExcelApp() {
       setAutoExportPending(false);
       if (items.length) generate("auto");
       else if (!canAnalyze) setNotice("Automatic analysis is not available on this server — enter the rows below and download the Excel file.");
+      else setNotice("No Excel file was downloaded because no measurements could be read. See the message under the image for the reason.");
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the batch completes
@@ -420,6 +427,17 @@ export function SketchToExcelApp() {
               {profile ? `Template: ${profile.config.name} · ${profile.config.sheet}` : "Loading template…"}
             </p>
           </div>
+          {info && (
+            <span
+              className={cn(
+                "hidden rounded-full px-2.5 py-1 text-xs font-semibold sm:inline-flex",
+                info.aiMode === "claude" ? "bg-emerald-100 text-emerald-800" : info.aiMode === "demo" ? "bg-amber-100 text-amber-900" : "bg-red-100 text-red-800",
+              )}
+              title={info.aiMode === "none" ? "ANTHROPIC_API_KEY is not set on the server" : undefined}
+            >
+              {info.aiMode === "claude" ? "AI reading: on" : info.aiMode === "demo" ? "AI: demo data" : "AI reading: off"}
+            </span>
+          )}
           <Link href="/admin" className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-stone-600 hover:bg-stone-200/60">
             <Settings2 className="h-4 w-4" /> <span className="hidden sm:inline">Template setup</span>
           </Link>
@@ -670,6 +688,16 @@ export function SketchToExcelApp() {
                 {selected.status === "analyzing" && (
                   <p className="mt-2 text-xs text-stone-500">Reading the handwriting, then matching each number to its dimension line. This usually takes 30–120 seconds.</p>
                 )}
+                {info?.aiMode === "none" && (
+                  <p className="mt-2 flex gap-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      Automatic reading is switched off: the server has no <code>ANTHROPIC_API_KEY</code>. No measurements can be read from the image until the
+                      administrator adds the key. You can still type the rows in manually.
+                    </span>
+                  </p>
+                )}
+                {needsCode && <p className="mt-2 text-sm text-amber-800">Enter the access code at the top of the page to analyse drawings.</p>}
                 {selected.status === "error" && selected.error && (
                   <p className="mt-2 flex gap-1.5 text-sm text-red-700">
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {selected.error}
@@ -799,7 +827,14 @@ export function SketchToExcelApp() {
               <Step n={5} title="Generate & download Excel" done={Boolean(lastFile)}>
                 <ExcelPreview items={items} profile={profile} />
 
-                {blockers.length > 0 ? (
+                {!hasData ? (
+                  <p className="mt-4 flex gap-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    {info?.aiMode === "none"
+                      ? "The rows are empty because automatic reading is off on this server (no ANTHROPIC_API_KEY). Type the values in, or ask the administrator to add the key."
+                      : "The rows are empty. Analyse the drawing, or type the values in, before downloading."}
+                  </p>
+                ) : blockers.length > 0 ? (
                   <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
                     <p className="mb-2 text-sm font-semibold text-amber-900">
                       {blockers.length} item{blockers.length === 1 ? "" : "s"} to check. You can download now as a draft — doubtful values are marked “⚠ CHECK” in
@@ -829,7 +864,7 @@ export function SketchToExcelApp() {
                   <button
                     type="button"
                     onClick={() => generate("user")}
-                    disabled={generating || needsCode}
+                    disabled={generating || needsCode || !hasData}
                     className={cn(
                       "inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-40",
                       blockers.length ? "border border-amber-500 bg-white text-amber-900 hover:bg-amber-50" : "bg-stone-900 text-white hover:bg-stone-800",
