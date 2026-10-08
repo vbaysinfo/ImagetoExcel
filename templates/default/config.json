@@ -1,0 +1,26 @@
+{
+  "name": "Avina Price Calculator (sample)",
+  "fileName": "test3.xlsx",
+  "config": {
+    "sheet": "Price Calculator",
+    "headerRow": 1,
+    "firstDataRow": 2,
+    "lastDataRow": 54,
+    "columns": {
+      "serial": "A",
+      "room": "B",
+      "item": "C",
+      "width": "D",
+      "height": "E",
+      "depth": "F",
+      "remarks": "L"
+    },
+    "inputUnit": "ft",
+    "decimals": 2,
+    "requiredFields": ["width", "height"],
+    "roomMode": "first-of-group",
+    "serialMode": "renumber",
+    "remarksMode": "source-dimensions",
+    "clearUnusedRows": true
+  }
+}
