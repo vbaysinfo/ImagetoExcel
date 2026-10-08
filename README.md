@@ -15,6 +15,17 @@ paper detection, shadow removal, contrast, sharpening, zoom, compare with
 original) → analyse → review & correct → generate → download
 `converted_measurement_YYYY-MM-DD.xlsx`.
 
+**Automatic mode** (on by default): uploading a sketch prepares it (the sheet
+of paper is detected and cropped), analyses it and downloads the Excel file
+straight away. If anything is uncertain the file is a *draft*
+(`…_draft.xlsx`): doubtful values are written with a `⚠ CHECK: …` note in
+Remarks and values that could not be found are left blank. Correct them in the
+editor and download again; the final file has no CHECK notes.
+
+**Edit an existing Excel file:** drop a generated (or hand-filled) `.xlsx` on
+the upload area. Its rows are loaded into the editor using the active
+template's mapping; change them and download the updated file.
+
 ## Setup
 
 1. Copy `.env.example` to `.env.local` and set `ANTHROPIC_API_KEY` (and

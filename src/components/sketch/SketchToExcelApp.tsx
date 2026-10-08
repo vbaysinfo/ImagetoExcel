@@ -24,19 +24,21 @@ import {
   DEFAULT_ENHANCE,
   FULL_QUAD,
   canvasToBlob,
+  detectPaper,
   downscale,
   enhance,
   rotate,
   sharpness,
   warpQuad,
 } from "@/lib/sketch/image/ops";
-import { ACCEPT_ATTR, loadFile } from "@/lib/sketch/image/load";
+import { ACCEPT_ATTR, isExcel, loadFile } from "@/lib/sketch/image/load";
 import {
   ApiError,
   analyzeImage,
   fetchToolInfo,
   generateExcel,
   getAccessCode,
+  importExcel,
   saveBlob,
   setStored,
   type ToolInfo,
@@ -70,6 +72,8 @@ interface SketchImage {
   error: string | null;
   analysis: AnalysisResult | null;
   startedAt: number | null;
+  /** Uploaded in automatic mode: analyse as soon as the image is prepared. */
+  auto: boolean;
 }
 
 let seqCounter = 0;
@@ -109,7 +113,12 @@ export function SketchToExcelApp() {
   const [highlight, setHighlight] = useState<{ itemId: string; field: DimensionKey | null } | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
-  const [lastFile, setLastFile] = useState<{ blob: Blob; fileName: string; rows: number } | null>(null);
+  const [lastFile, setLastFile] = useState<{ blob: Blob; fileName: string; rows: number; draft: boolean; checks: number } | null>(null);
+  /** Rows changed since the last download. */
+  const [dirty, setDirty] = useState(false);
+  const [autoMode, setAutoMode] = useState(true);
+  const [autoExportPending, setAutoExportPending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [accessCode, setAccessCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -175,20 +184,38 @@ export function SketchToExcelApp() {
 
   /* ------------------------------- Upload -------------------------------- */
 
+  const autoRef = useRef(autoMode);
+  useEffect(() => {
+    autoRef.current = autoMode;
+  }, [autoMode]);
+
   const addFiles = useCallback(async (files: FileList | File[]) => {
     const errors: string[] = [];
     const added: SketchImage[] = [];
     for (const file of Array.from(files)) {
+      if (isExcel(file)) {
+        try {
+          const { items: imported } = await importExcel(file);
+          setItems((list) => [...list, ...imported]);
+          setDirty(true);
+          setNotice(`Loaded ${imported.length} rows from "${file.name}". Edit them below, then download the updated Excel.`);
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : `"${file.name}" could not be read.`);
+        }
+        continue;
+      }
       try {
         for (const page of await loadFile(file)) {
           const blob = await canvasToBlob(downscale(page.canvas, 1600), "image/jpeg", 0.85);
+          // Crop to the sheet of paper automatically when its edges are clear.
+          const paper = detectPaper(downscale(page.canvas, 1600));
           added.push({
             id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
             seq: ++seqCounter,
             name: page.name,
             original: page.canvas,
             originalUrl: URL.createObjectURL(blob),
-            settings: { rotation: 0, fineAngle: 0, quad: FULL_QUAD, enhance: DEFAULT_ENHANCE },
+            settings: { rotation: 0, fineAngle: 0, quad: paper ?? FULL_QUAD, enhance: DEFAULT_ENHANCE },
             processed: null,
             processedUrl: null,
             processing: true,
@@ -198,6 +225,7 @@ export function SketchToExcelApp() {
             error: null,
             analysis: null,
             startedAt: null,
+            auto: autoRef.current,
           });
         }
       } catch (e) {
@@ -208,6 +236,10 @@ export function SketchToExcelApp() {
     if (added.length) {
       setImages((list) => [...list, ...added]);
       setSelectedImageId((cur) => cur ?? added[0].id);
+      if (autoRef.current) {
+        setAutoExportPending(true);
+        setNotice(null);
+      }
     }
   }, []);
 
@@ -227,7 +259,7 @@ export function SketchToExcelApp() {
 
   const analyze = async (img: SketchImage) => {
     if (!img.processed) return;
-    patchImage(img.id, { status: "analyzing", error: null, startedAt: Date.now() });
+    patchImage(img.id, { status: "analyzing", error: null, startedAt: Date.now(), auto: false });
     try {
       const blob = await canvasToBlob(img.processed, "image/jpeg", 0.9);
       const result = await analyzeImage({
@@ -248,6 +280,7 @@ export function SketchToExcelApp() {
         return next;
       });
       setSelectedImageId(img.id);
+      setDirty(true);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Analysis failed.";
       if (e instanceof ApiError && e.code === "ACCESS_DENIED") setNeedsCode(true);
@@ -267,11 +300,11 @@ export function SketchToExcelApp() {
 
   const updateItem = (next: LineItem) => {
     setItems((list) => list.map((it) => (it.id === next.id ? next : it)));
-    setLastFile(null);
+    setDirty(true);
   };
   const removeItem = (id: string) => {
     setItems((list) => list.filter((it) => it.id !== id));
-    setLastFile(null);
+    setDirty(true);
   };
   const moveItem = (id: string, dir: -1 | 1) => {
     setItems((list) => {
@@ -302,14 +335,30 @@ export function SketchToExcelApp() {
     setImages((list) => list.map((img) => (img.seq === seq && img.analysis ? { ...img, analysis: { ...img.analysis, drawingUnit: unit, unitSource: "explicit" } } : img)));
   };
 
-  const generate = async () => {
-    if (!profile || blockers.length) return;
+  /**
+   * Generate and download. With open checks the file is a draft: doubtful
+   * values are written with a "⚠ CHECK" note in Remarks and values that were
+   * not found stay blank — nothing is invented.
+   */
+  const generate = async (source: "auto" | "user" = "user") => {
+    if (!profile || !items.length) return;
+    const draft = blockers.length > 0;
     setGenerating(true);
     setGenerateError(null);
     try {
-      const { blob, fileName } = await generateExcel(toGenerateRows(items, profile.config));
-      setLastFile({ blob, fileName, rows: items.length });
-      saveBlob(blob, fileName);
+      const rows = toGenerateRows(items, profile.config, { markChecks: draft });
+      const result = await generateExcel(rows, draft);
+      const fileName = draft ? result.fileName.replace(/\.xlsx$/, "_draft.xlsx") : result.fileName;
+      setLastFile({ blob: result.blob, fileName, rows: items.length, draft, checks: blockers.length });
+      setDirty(false);
+      saveBlob(result.blob, fileName);
+      if (source === "auto") {
+        setNotice(
+          draft
+            ? `Excel downloaded automatically as a draft: ${blockers.length} value(s) are marked “⚠ CHECK” in Remarks. Correct them below and download again.`
+            : "Excel downloaded automatically. You can still edit any value below and download again.",
+        );
+      }
     } catch (e) {
       if (e instanceof ApiError && e.code === "ACCESS_DENIED") setNeedsCode(true);
       setGenerateError(e instanceof Error ? e.message : "The Excel file could not be generated.");
@@ -317,6 +366,31 @@ export function SketchToExcelApp() {
       setGenerating(false);
     }
   };
+
+  /* ----------------------------- Automatic mode ---------------------------- */
+
+  const canAnalyze = info !== null && info.aiMode !== "none" && !needsCode;
+  // Analyse automatically uploaded images one at a time, once they are prepared.
+  const nextAuto = images.find((i) => i.auto && i.processed && !i.processing && i.status === "idle");
+  useEffect(() => {
+    if (!nextAuto || anyAnalyzing || !canAnalyze) return;
+    const t = setTimeout(() => analyze(nextAuto), 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- trigger on queue changes only
+  }, [nextAuto?.id, anyAnalyzing, canAnalyze]);
+
+  // When the whole batch is analysed, generate and download the Excel file.
+  const autoBusy = images.some((i) => i.status === "analyzing" || (i.auto && i.status === "idle" && canAnalyze));
+  useEffect(() => {
+    if (!autoExportPending || autoBusy || !info) return;
+    const t = setTimeout(() => {
+      setAutoExportPending(false);
+      if (items.length) generate("auto");
+      else if (!canAnalyze) setNotice("Automatic analysis is not available on this server — enter the rows below and download the Excel file.");
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the batch completes
+  }, [autoExportPending, autoBusy, info]);
 
   const selected = images.find((i) => i.id === selectedImageId) ?? null;
   const editing = images.find((i) => i.id === editingId) ?? null;
@@ -416,7 +490,7 @@ export function SketchToExcelApp() {
               >
                 <Upload className="mb-2 h-7 w-7 text-stone-400" aria-hidden />
                 <p className="text-sm font-medium">Drag &amp; drop sketches here</p>
-                <p className="mb-3 text-xs text-stone-500">JPG, PNG, WEBP or PDF · several pages allowed</p>
+                <p className="mb-3 text-xs text-stone-500">Sketch photos (JPG, PNG, WEBP, PDF) · or an Excel file (.xlsx) to edit</p>
                 <div className="flex flex-wrap justify-center gap-2">
                   <button type="button" onClick={() => fileInput.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-800">
                     <ImagePlus className="h-4 w-4" /> Choose files
@@ -448,6 +522,20 @@ export function SketchToExcelApp() {
                   }}
                 />
               </div>
+              <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl bg-stone-50 p-3 text-sm">
+                <input type="checkbox" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-600" />
+                <span>
+                  <span className="font-medium">Automatic: analyse and download Excel on upload</span>
+                  <span className="block text-xs text-stone-500">
+                    The file downloads as soon as analysis finishes. Anything uncertain is marked “⚠ CHECK” in Remarks; edit below and download again.
+                  </span>
+                </span>
+              </label>
+              {notice && (
+                <p className="mt-3 flex gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> {notice}
+                </p>
+              )}
               {uploadErrors.map((err, i) => (
                 <p key={i} className="mt-2 flex gap-1.5 text-sm text-red-700">
                   <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {err}
@@ -714,7 +802,8 @@ export function SketchToExcelApp() {
                 {blockers.length > 0 ? (
                   <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4">
                     <p className="mb-2 text-sm font-semibold text-amber-900">
-                      {blockers.length} item{blockers.length === 1 ? "" : "s"} to check before the Excel file can be generated:
+                      {blockers.length} item{blockers.length === 1 ? "" : "s"} to check. You can download now as a draft — doubtful values are marked “⚠ CHECK” in
+                      Remarks and missing ones are left blank — or fix them first:
                     </p>
                     <ul className="max-h-48 space-y-1 overflow-y-auto text-sm">
                       {blockers.map((b, i) => (
@@ -732,21 +821,26 @@ export function SketchToExcelApp() {
                   </div>
                 ) : (
                   <p className="mt-4 flex gap-1.5 text-sm text-emerald-800">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> All measurements are confirmed. Ready to generate.
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> All measurements are confirmed. The Excel file will be final (no CHECK marks).
                   </p>
                 )}
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={generate}
-                    disabled={generating || blockers.length > 0 || needsCode}
-                    className="inline-flex items-center gap-2 rounded-xl bg-stone-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => generate("user")}
+                    disabled={generating || needsCode}
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-40",
+                      blockers.length ? "border border-amber-500 bg-white text-amber-900 hover:bg-amber-50" : "bg-stone-900 text-white hover:bg-stone-800",
+                    )}
                   >
                     {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
-                    Generate Excel
+                    {blockers.length
+                      ? lastFile ? "Download updated draft Excel" : "Download draft Excel"
+                      : lastFile ? "Generate & download updated Excel" : "Generate & download Excel"}
                   </button>
-                  {lastFile && (
+                  {lastFile && !dirty && (
                     <button
                       type="button"
                       onClick={() => saveBlob(lastFile.blob, lastFile.fileName)}
@@ -756,7 +850,13 @@ export function SketchToExcelApp() {
                     </button>
                   )}
                 </div>
-                {lastFile && <p className="mt-2 text-xs text-stone-500">{lastFile.rows} rows written into a copy of the template. Formulas recalculate when the file is opened.</p>}
+                {lastFile && (
+                  <p className={cn("mt-2 text-xs", dirty ? "font-medium text-amber-800" : "text-stone-500")}>
+                    {dirty
+                      ? "You have changed the rows since the last download — download again to get the updated file."
+                      : `${lastFile.rows} rows written into a copy of the template${lastFile.draft ? ` (draft, ${lastFile.checks} to check)` : ""}. Formulas recalculate when the file is opened.`}
+                  </p>
+                )}
                 {generateError && (
                   <p className="mt-2 flex gap-1.5 text-sm text-red-700">
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {generateError}

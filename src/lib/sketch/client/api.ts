@@ -1,5 +1,5 @@
 /** Browser-side calls to the tool's API routes. */
-import type { AnalysisResult, GenerateRow, TemplateProfile } from "../types";
+import type { AnalysisResult, GenerateRow, LineItem, TemplateProfile } from "../types";
 
 const ACCESS_KEY = "sketch-access-code";
 const ADMIN_KEY = "sketch-admin-token";
@@ -93,15 +93,21 @@ export async function analyzeImage(opts: {
   return (await request("/api/sketch/analyze", { method: "POST", body: form, signal: opts.signal })).json();
 }
 
-export async function generateExcel(rows: GenerateRow[]): Promise<{ blob: Blob; fileName: string }> {
+export async function generateExcel(rows: GenerateRow[], draft = false): Promise<{ blob: Blob; fileName: string }> {
   const res = await request("/api/sketch/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify({ rows, draft }),
   });
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "converted_measurement.xlsx";
   return { blob: await res.blob(), fileName };
+}
+
+export async function importExcel(file: File): Promise<{ items: LineItem[]; fileName: string }> {
+  const form = new FormData();
+  form.set("file", file);
+  return (await request("/api/sketch/import", { method: "POST", body: form })).json();
 }
 
 /* ------------------------------ Admin --------------------------------- */

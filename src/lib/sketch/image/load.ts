@@ -2,7 +2,12 @@
 import { createCanvas, downscale } from "./ops";
 
 export const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-export const ACCEPT_ATTR = ".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf";
+export const ACCEPT_ATTR =
+  ".jpg,.jpeg,.png,.webp,.pdf,.xlsx,image/jpeg,image/png,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export function isExcel(file: File) {
+  return /\.xlsx$/i.test(file.name) || file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
 /** Working resolution kept in memory for editing. */
 const WORKING_EDGE = 3000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;

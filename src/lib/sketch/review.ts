@@ -106,14 +106,31 @@ export function composeRemarks(it: LineItem, config: TemplateConfig): string {
   return `Sketch: ${dims.map((m) => String(round(m.value as number, 3))).join(" × ")} ${unit}`;
 }
 
-export function toGenerateRows(items: LineItem[], config: TemplateConfig): GenerateRow[] {
+/** Short note listing what still needs checking on a row (used in draft exports). */
+export function checkNote(it: LineItem, config: TemplateConfig): string {
+  const parts: string[] = [];
+  for (const k of DIMENSION_KEYS) {
+    const m = it[k];
+    if (m.value === null && config.requiredFields.includes(k)) parts.push(`${LABEL[k].toLowerCase()} missing`);
+    else if (m.needsReview) parts.push(m.value === null ? `${LABEL[k].toLowerCase()}?` : `${LABEL[k].toLowerCase()} ${formatNumber(m.value, 3)} ${m.unit}?`);
+  }
+  if (it.question && !it.confirmed) parts.push(it.question);
+  if (!it.item.trim()) parts.push("item name missing");
+  return parts.length ? `⚠ CHECK: ${parts.join("; ")}` : "";
+}
+
+export function toGenerateRows(items: LineItem[], config: TemplateConfig, opts: { markChecks?: boolean } = {}): GenerateRow[] {
   const mm = (m: Measurement) => (m.value === null ? null : toMm(m.value, m.unit));
-  return items.map((it) => ({
-    room: it.room,
-    item: it.item,
-    widthMm: mm(it.width),
-    heightMm: mm(it.height),
-    depthMm: mm(it.depth),
-    remarks: composeRemarks(it, config),
-  }));
+  return items.map((it) => {
+    const remarks = composeRemarks(it, config);
+    const check = opts.markChecks ? checkNote(it, config) : "";
+    return {
+      room: it.room,
+      item: it.item,
+      widthMm: mm(it.width),
+      heightMm: mm(it.height),
+      depthMm: mm(it.depth),
+      remarks: [remarks, check].filter(Boolean).join(" ").slice(0, 1000),
+    };
+  });
 }

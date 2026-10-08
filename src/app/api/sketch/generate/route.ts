@@ -7,6 +7,8 @@ import { loadTemplate } from "@/lib/sketch/templates/store";
 const num = z.number().finite().positive().max(1_000_000).nullable();
 const BodySchema = z.object({
   templateId: z.string().optional(),
+  /** Draft export: rows may still have blank required values (marked for checking in Remarks). */
+  draft: z.boolean().optional(),
   rows: z
     .array(
       z.object({
@@ -38,7 +40,7 @@ export async function POST(request: Request) {
     const incomplete = body.rows.findIndex((r) =>
       required.some((k) => r[`${k}Mm` as "widthMm" | "heightMm" | "depthMm"] === null),
     );
-    if (incomplete !== -1) {
+    if (incomplete !== -1 && !body.draft) {
       throw new SketchError(
         "INCOMPLETE_ROW",
         `Row ${incomplete + 1} is missing a required measurement (${required.join(", ")}). Please complete it before generating the Excel file.`,
@@ -59,6 +61,7 @@ export async function POST(request: Request) {
         "Content-Disposition": `attachment; filename="${fileName}"`,
         "X-Rows-Written": String(result.rowsWritten),
         "X-Rows-Added": String(result.rowsAdded),
+        "X-Draft": body.draft ? "1" : "0",
         "Cache-Control": "no-store",
       },
     });
