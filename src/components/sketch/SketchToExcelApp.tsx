@@ -11,6 +11,7 @@ import {
   ImagePlus,
   Layers,
   Loader2,
+  MousePointerClick,
   Plus,
   ScanSearch,
   Settings2,
@@ -43,14 +44,15 @@ import {
   setStored,
   type ToolInfo,
 } from "@/lib/sketch/client/api";
-import { findBlockers, newManualItem, toGenerateRows } from "@/lib/sketch/review";
+import { emptyMeasurement, findBlockers, newManualItem, toGenerateRows } from "@/lib/sketch/review";
 import type { AnalysisResult, DimensionKey, LengthUnit, LineItem } from "@/lib/sketch/types";
-import { LENGTH_UNITS } from "@/lib/sketch/types";
+import { DIMENSION_KEYS, LENGTH_UNITS } from "@/lib/sketch/types";
 import { UNIT_LABELS } from "@/lib/sketch/units";
 import { ImageEditor, type EditSettings } from "./ImageEditor";
 import { AnnotatedImage, ITEM_COLORS } from "./AnnotatedImage";
 import { ItemCard } from "./ItemCard";
 import { ExcelPreview } from "./ExcelPreview";
+import { TapEntry, type TapTarget } from "./TapEntry";
 
 /** Longest edge sent to the vision model. */
 const ANALYSIS_EDGE = 1568;
@@ -119,6 +121,10 @@ export function SketchToExcelApp() {
   const [autoMode, setAutoMode] = useState(true);
   const [autoExportPending, setAutoExportPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /** Tap-to-enter: where the user tapped, and which row/field the value goes to. */
+  const [tap, setTap] = useState<{ x: number; y: number } | null>(null);
+  const [tapTarget, setTapTarget] = useState<TapTarget>({ itemId: null, field: "width" });
+  const [lastUnit, setLastUnit] = useState<LengthUnit>("mm");
   const [accessCode, setAccessCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -324,6 +330,7 @@ export function SketchToExcelApp() {
     const unit: LengthUnit = selected?.analysis?.drawingUnit ?? last?.width.unit ?? "mm";
     const row = newManualItem(selected?.seq ?? last?.imageIndex ?? 0, unit, last?.room ?? "");
     setItems((list) => [...list, row]);
+    setTapTarget({ itemId: row.id, field: "width" });
     setTimeout(() => document.getElementById(`row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
   };
   const setImageUnit = (seq: number, unit: LengthUnit) => {
@@ -392,12 +399,60 @@ export function SketchToExcelApp() {
     const t = setTimeout(() => {
       setAutoExportPending(false);
       if (items.length) generate("auto");
-      else if (!canAnalyze) setNotice("Automatic analysis is not available on this server — enter the rows below and download the Excel file.");
-      else setNotice("No Excel file was downloaded because no measurements could be read. See the message under the image for the reason.");
+      else if (canAnalyze) setNotice("No Excel file was downloaded because no measurements could be read. See the message under the image for the reason.");
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run when the batch completes
   }, [autoExportPending, autoBusy, info]);
+
+  /* ---------------------------- Tap-to-enter ----------------------------- */
+
+  const manualMode = info?.aiMode === "none";
+  const tapFields = profile ? DIMENSION_KEYS.filter((k) => profile.config.columns[k]) : DIMENSION_KEYS;
+  const nextTarget = (itemId: string, field: DimensionKey): TapTarget => {
+    const i = tapFields.indexOf(field);
+    return i >= 0 && i < tapFields.length - 1 ? { itemId, field: tapFields[i + 1] } : { itemId: null, field: tapFields[0] };
+  };
+  const firstEmptyField = (it: LineItem): DimensionKey => tapFields.find((k) => it[k].value === null) ?? tapFields[0];
+
+  const saveTap = (t: TapTarget, value: number, unit: LengthUnit) => {
+    const sel = images.find((i) => i.id === selectedImageId);
+    if (!tap || !sel) return;
+    const clamp = (v: number) => Math.min(Math.max(v, 0), 0.93);
+    const bbox = { x: clamp(tap.x - 0.035), y: clamp(tap.y - 0.018), w: 0.07, h: 0.036 };
+    const measurement = (u: LengthUnit) => ({
+      ...emptyMeasurement(u),
+      value,
+      source: "manual" as const,
+      confidence: 100,
+      rawText: String(value),
+      bbox,
+    });
+    const existing = t.itemId ? items.find((it) => it.id === t.itemId) : undefined;
+    if (existing) {
+      updateItem({ ...existing, imageIndex: existing.imageIndex || sel.seq, [t.field]: measurement(existing.width.unit) });
+      setTapTarget(nextTarget(existing.id, t.field));
+    } else {
+      const row = newManualItem(sel.seq, unit, items[items.length - 1]?.room ?? "");
+      row[t.field] = measurement(unit);
+      setItems((list) => [...list, row]);
+      setDirty(true);
+      setTapTarget(nextTarget(row.id, t.field));
+    }
+    setLastUnit(unit);
+    setTap(null);
+  };
+
+  const addNamedRow = (name: string) => {
+    const sel = images.find((i) => i.id === selectedImageId);
+    const last = items[items.length - 1];
+    const row = newManualItem(sel?.seq ?? last?.imageIndex ?? 0, last?.width.unit ?? lastUnit, last?.room ?? "");
+    row.item = name;
+    setItems((list) => [...list, row]);
+    setDirty(true);
+    setTapTarget({ itemId: row.id, field: tapFields[0] });
+  };
+  const quickItems = Array.from(new Set((profile?.exampleRows ?? []).map((r) => r.item.trim()).filter(Boolean))).slice(0, 14);
 
   const selected = images.find((i) => i.id === selectedImageId) ?? null;
   const editing = images.find((i) => i.id === editingId) ?? null;
@@ -431,11 +486,11 @@ export function SketchToExcelApp() {
             <span
               className={cn(
                 "hidden rounded-full px-2.5 py-1 text-xs font-semibold sm:inline-flex",
-                info.aiMode === "claude" ? "bg-emerald-100 text-emerald-800" : info.aiMode === "demo" ? "bg-amber-100 text-amber-900" : "bg-red-100 text-red-800",
+                info.aiMode === "claude" ? "bg-emerald-100 text-emerald-800" : info.aiMode === "demo" ? "bg-amber-100 text-amber-900" : "bg-sky-100 text-sky-800",
               )}
               title={info.aiMode === "none" ? "ANTHROPIC_API_KEY is not set on the server" : undefined}
             >
-              {info.aiMode === "claude" ? "AI reading: on" : info.aiMode === "demo" ? "AI: demo data" : "AI reading: off"}
+              {info.aiMode === "claude" ? "AI reading: on" : info.aiMode === "demo" ? "AI: demo data" : "Tap-to-enter mode"}
             </span>
           )}
           <Link href="/admin" className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm text-stone-600 hover:bg-stone-200/60">
@@ -474,10 +529,10 @@ export function SketchToExcelApp() {
             </form>
           </Banner>
         )}
-        {info?.aiMode === "none" && (
-          <Banner tone="warn" title="AI analysis is not configured on this server">
-            Automatic reading of drawings needs an <code>ANTHROPIC_API_KEY</code> on the server. You can still upload images for reference and enter the
-            measurements manually — the Excel file is generated the same way.
+        {manualMode && (
+          <Banner tone="info" title="Tap-to-enter mode — no API key needed">
+            Upload a sketch, then tap each number on the drawing and type it in. Values fill width → height → depth of the current row; use the
+            quick-add buttons to start rows like “Loft” or “Left Expo”. The Excel file is generated from your template exactly as before.
           </Banner>
         )}
         {(info?.aiMode === "demo" || anyDemo) && (
@@ -540,6 +595,7 @@ export function SketchToExcelApp() {
                   }}
                 />
               </div>
+              {!manualMode && (
               <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl bg-stone-50 p-3 text-sm">
                 <input type="checkbox" checked={autoMode} onChange={(e) => setAutoMode(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-600" />
                 <span>
@@ -549,6 +605,7 @@ export function SketchToExcelApp() {
                   </span>
                 </span>
               </label>
+              )}
               {notice && (
                 <p className="mt-3 flex gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> {notice}
@@ -585,7 +642,7 @@ export function SketchToExcelApp() {
             </Step>
 
             {selected && (
-              <Step n={2} title="Preview & prepare" done={selected.status === "done"} id="preview">
+              <Step n={2} title={manualMode ? "Tap the numbers on the drawing" : "Preview & prepare"} done={selected.status === "done"} id="preview">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <p className="min-w-0 flex-1 truncate text-sm text-stone-600" title={selected.name}>
                     {selected.name}
@@ -602,7 +659,17 @@ export function SketchToExcelApp() {
                   </button>
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                {manualMode && (
+                  <p className="mb-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-950">
+                    <b>Tap a number</b> on the drawing, type it, press <b>Enter</b>. Next value goes to:{" "}
+                    <b>
+                      {tapTarget.itemId
+                        ? `row ${items.findIndex((i) => i.id === tapTarget.itemId) + 1} (${items.find((i) => i.id === tapTarget.itemId)?.item || "no name"}) — ${tapTarget.field}`
+                        : `a new row — ${tapTarget.field}`}
+                    </b>
+                  </p>
+                )}
+                <div className="rounded-2xl border border-stone-200 bg-white">
                   {selected.processed && selected.processedUrl ? (
                     <AnnotatedImage
                       src={selected.processedUrl}
@@ -611,11 +678,25 @@ export function SketchToExcelApp() {
                       items={selectedItems}
                       tokens={selected.analysis?.tokens ?? []}
                       colorOf={colorOf}
-                      showOverlay={showOverlay && selected.status === "done"}
+                      showOverlay={showOverlay && (selected.status === "done" || selectedItems.length > 0)}
                       showTokens={showUnused}
                       highlight={highlight}
                       onSelectItem={(id) => document.getElementById(`row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
-                    />
+                      onPointClick={selected.status === "analyzing" ? undefined : (p) => setTap(p)}
+                    >
+                      {tap && (
+                        <TapEntry
+                          key={`${tap.x}-${tap.y}`}
+                          point={tap}
+                          rows={items.map((item, index) => ({ item, index }))}
+                          target={tapTarget}
+                          fields={tapFields}
+                          defaultUnit={lastUnit}
+                          onSave={saveTap}
+                          onClose={() => setTap(null)}
+                        />
+                      )}
+                    </AnnotatedImage>
                   ) : (
                     <div className="flex aspect-[4/3] items-center justify-center text-sm text-stone-500">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparing image…
@@ -623,11 +704,11 @@ export function SketchToExcelApp() {
                   )}
                 </div>
 
-                {selected.status === "done" && (
+                {(selected.status === "done" || selectedItems.length > 0) && (
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={showOverlay} onChange={(e) => setShowOverlay(e.target.checked)} className="h-4 w-4 accent-amber-600" />
-                      Show detected measurements
+                      Show measurements on drawing
                     </label>
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={showUnused} onChange={(e) => setShowUnused(e.target.checked)} className="h-4 w-4 accent-red-600" />
@@ -646,6 +727,8 @@ export function SketchToExcelApp() {
                   </ul>
                 )}
 
+                {!manualMode && (
+                <>
                 <div className="mt-4 space-y-2">
                   <label className="block text-xs font-semibold uppercase tracking-wide text-stone-500" htmlFor="hints">
                     Notes for the AI (optional)
@@ -688,14 +771,7 @@ export function SketchToExcelApp() {
                 {selected.status === "analyzing" && (
                   <p className="mt-2 text-xs text-stone-500">Reading the handwriting, then matching each number to its dimension line. This usually takes 30–120 seconds.</p>
                 )}
-                {info?.aiMode === "none" && (
-                  <p className="mt-2 flex gap-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>
-                      Automatic reading is switched off: the server has no <code>ANTHROPIC_API_KEY</code>. No measurements can be read from the image until the
-                      administrator adds the key. You can still type the rows in manually.
-                    </span>
-                  </p>
+                </>
                 )}
                 {needsCode && <p className="mt-2 text-sm text-amber-800">Enter the access code at the top of the page to analyse drawings.</p>}
                 {selected.status === "error" && selected.error && (
@@ -757,7 +833,7 @@ export function SketchToExcelApp() {
               </Step>
             )}
 
-            <Step n={4} title="Review & correct measurements" done={items.length > 0 && reviewCount === 0}>
+            <Step n={images.some((i) => i.analysis) ? 4 : 3} title="Review & correct measurements" done={items.length > 0 && reviewCount === 0}>
               {profile && (
                 <p className="mb-4 text-sm text-stone-600">
                   Each card is one row of <b>{profile.config.sheet}</b>. Values stay in the drawing&apos;s unit here and are converted to{" "}
@@ -789,6 +865,9 @@ export function SketchToExcelApp() {
                       color={colorOf(it.id)}
                       imageLabel={imageLabel(it.imageIndex)}
                       highlighted={highlight?.itemId === it.id}
+                      active={tapTarget.itemId === it.id}
+                      activeField={tapTarget.itemId === it.id ? tapTarget.field : null}
+                      onActivate={(field) => setTapTarget({ itemId: it.id, field: field ?? firstEmptyField(it) })}
                       onChange={updateItem}
                       onRemove={() => removeItem(it.id)}
                       onMove={(d) => moveItem(it.id, d)}
@@ -813,6 +892,23 @@ export function SketchToExcelApp() {
                   <option key={r} value={r} />
                 ))}
               </datalist>
+              {quickItems.length > 0 && (
+                <div className="mt-4">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Quick add a row</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {quickItems.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => addNamedRow(name)}
+                        className="rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-700 hover:border-amber-600 hover:text-amber-800"
+                      >
+                        + {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={addManualRow}
@@ -824,14 +920,14 @@ export function SketchToExcelApp() {
             </Step>
 
             {profile && items.length > 0 && (
-              <Step n={5} title="Generate & download Excel" done={Boolean(lastFile)}>
+              <Step n={images.some((i) => i.analysis) ? 5 : 4} title="Generate & download Excel" done={Boolean(lastFile)}>
                 <ExcelPreview items={items} profile={profile} />
 
                 {!hasData ? (
                   <p className="mt-4 flex gap-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    {info?.aiMode === "none"
-                      ? "The rows are empty because automatic reading is off on this server (no ANTHROPIC_API_KEY). Type the values in, or ask the administrator to add the key."
+                    {manualMode
+                      ? "The rows are empty. Tap the numbers on the drawing (or type them into the rows) before downloading."
                       : "The rows are empty. Analyse the drawing, or type the values in, before downloading."}
                   </p>
                 ) : blockers.length > 0 ? (
@@ -930,11 +1026,16 @@ function StatusDot({ img }: { img: SketchImage }) {
   return null;
 }
 
-function Banner({ tone, title, children }: { tone: "error" | "warn"; title: string; children: React.ReactNode }) {
+function Banner({ tone, title, children }: { tone: "error" | "warn" | "info"; title: string; children: React.ReactNode }) {
   return (
-    <div className={cn("rounded-2xl border p-4 text-sm", tone === "error" ? "border-red-300 bg-red-50 text-red-900" : "border-amber-300 bg-amber-50 text-amber-950")}>
+    <div
+      className={cn(
+        "rounded-2xl border p-4 text-sm",
+        tone === "error" ? "border-red-300 bg-red-50 text-red-900" : tone === "info" ? "border-sky-200 bg-sky-50 text-sky-950" : "border-amber-300 bg-amber-50 text-amber-950",
+      )}
+    >
       <p className="mb-1 flex items-center gap-1.5 font-semibold">
-        <AlertTriangle className="h-4 w-4" /> {title}
+        {tone === "info" ? <MousePointerClick className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />} {title}
       </p>
       <div>{children}</div>
     </div>

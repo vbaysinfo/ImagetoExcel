@@ -19,6 +19,9 @@ export function ItemCard({
   color,
   imageLabel,
   highlighted,
+  active = false,
+  activeField = null,
+  onActivate,
   onChange,
   onRemove,
   onMove,
@@ -31,6 +34,10 @@ export function ItemCard({
   color: string;
   imageLabel: string | null;
   highlighted: boolean;
+  /** Tap-to-enter values on the drawing go to this row. */
+  active?: boolean;
+  activeField?: DimensionKey | null;
+  onActivate?: (field?: DimensionKey) => void;
   onChange: (item: LineItem) => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
@@ -60,7 +67,7 @@ export function ItemCard({
       id={`row-${item.id}`}
       className={cn(
         "scroll-mt-24 rounded-2xl border bg-white p-4 shadow-sm transition-shadow sm:p-5",
-        highlighted ? "border-amber-500 ring-2 ring-amber-500/30" : "border-stone-200",
+        highlighted ? "border-amber-500 ring-2 ring-amber-500/30" : active ? "border-sky-500 ring-2 ring-sky-500/25" : "border-stone-200",
       )}
       onMouseEnter={() => onHover({ itemId: item.id, field: null })}
       onMouseLeave={() => onHover(null)}
@@ -147,6 +154,8 @@ export function ItemCard({
             required={config.requiredFields.includes(k)}
             onChange={(m) => onChange({ ...item, [k]: m })}
             onHover={(h) => onHover(h ? { itemId: item.id, field: k } : { itemId: item.id, field: null })}
+            onFocus={() => onActivate?.(k)}
+            tapActive={activeField === k}
           />
         ))}
       </div>

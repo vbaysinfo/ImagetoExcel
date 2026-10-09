@@ -24,6 +24,8 @@ export function AnnotatedImage({
   showTokens,
   highlight,
   onSelectItem,
+  onPointClick,
+  children,
 }: {
   src: string;
   width: number;
@@ -35,6 +37,10 @@ export function AnnotatedImage({
   showTokens: boolean;
   highlight: { itemId: string; field: DimensionKey | null } | null;
   onSelectItem?: (itemId: string) => void;
+  /** Tap-to-enter: called with the normalised point that was clicked. */
+  onPointClick?: (p: { x: number; y: number }) => void;
+  /** Extra content positioned over the image (e.g. the entry popover). */
+  children?: React.ReactNode;
 }) {
   const font = Math.max(12, Math.round(Math.max(width, height) / 70));
   const stroke = Math.max(1.5, Math.max(width, height) / 600);
@@ -43,9 +49,19 @@ export function AnnotatedImage({
   return (
     <div className="relative w-full">
       {/* eslint-disable-next-line @next/next/no-img-element -- local blob URL */}
-      <img src={src} alt="Drawing being analysed" className="block h-auto w-full select-none" draggable={false} />
+      <img
+        src={src}
+        alt="Drawing being analysed"
+        className={`block h-auto w-full select-none ${onPointClick ? "cursor-crosshair" : ""}`}
+        draggable={false}
+        onClick={(e) => {
+          if (!onPointClick) return;
+          const r = e.currentTarget.getBoundingClientRect();
+          onPointClick({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+        }}
+      />
       {showOverlay && (
-        <svg viewBox={`0 0 ${width} ${height}`} className="absolute inset-0 h-full w-full" aria-hidden>
+        <svg viewBox={`0 0 ${width} ${height}`} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
           {showTokens &&
             tokens
               .filter((t) => t.bbox && (t.kind === "number" || t.kind === "expression") && !usedTokenIds.has(t.id))
@@ -69,7 +85,7 @@ export function AnnotatedImage({
             const active = highlight?.itemId === it.id;
             const dim = highlight && !active ? 0.25 : 1;
             return (
-              <g key={it.id} opacity={dim} onClick={() => onSelectItem?.(it.id)} style={{ cursor: onSelectItem ? "pointer" : undefined, pointerEvents: "auto" }}>
+              <g key={it.id} opacity={dim} onClick={() => onSelectItem?.(it.id)} style={{ cursor: onSelectItem ? "pointer" : undefined, pointerEvents: onPointClick ? "none" : "auto" }}>
                 {it.region && (
                   <rect
                     x={it.region.x * width}
@@ -119,6 +135,7 @@ export function AnnotatedImage({
           })}
         </svg>
       )}
+      {children}
     </div>
   );
 }

@@ -15,7 +15,16 @@ paper detection, shadow removal, contrast, sharpening, zoom, compare with
 original) → analyse → review & correct → generate → download
 `converted_measurement_YYYY-MM-DD.xlsx`.
 
-**Automatic mode** (on by default): uploading a sketch prepares it (the sheet
+**Works without an API key — tap-to-enter mode.** When no
+`ANTHROPIC_API_KEY` is set, the tool runs entirely without AI: upload the
+sketch, tap each number on the drawing and type it (Enter saves and moves
+width → height → depth → next row). Quick-add buttons create rows named like
+your template ("Loft", "Left Expo", "Wardrobe Shutter"…). Values are marked on
+the drawing, calculated live with the template's formulas and exported the
+same way. (Free OCR such as Tesseract was tested and cannot read handwritten
+dimensions reliably, so it is not used.)
+
+**Automatic mode** (only with an API key; on by default): uploading a sketch prepares it (the sheet
 of paper is detected and cropped), analyses it and downloads the Excel file
 straight away. If anything is uncertain the file is a *draft*
 (`…_draft.xlsx`): doubtful values are written with a `⚠ CHECK: …` note in
@@ -33,8 +42,7 @@ template's mapping; change them and download the updated file.
 2. `npm run dev` and open <http://localhost:3000>.
 3. Template setup: <http://localhost:3000/admin>.
 
-Without an API key the tool still works in manual mode (enter rows by hand →
-same Excel output).
+Without an API key the tool works in tap-to-enter mode (see above).
 
 ## The Excel template
 

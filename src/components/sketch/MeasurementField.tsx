@@ -21,12 +21,17 @@ export function MeasurementField({
   required,
   onChange,
   onHover,
+  onFocus,
+  tapActive = false,
 }: {
   label: string;
   m: Measurement;
   required: boolean;
   onChange: (m: Measurement) => void;
   onHover?: (hovering: boolean) => void;
+  onFocus?: () => void;
+  /** The next value tapped on the drawing goes here. */
+  tapActive?: boolean;
 }) {
   const [text, setText] = useState(m.value === null ? "" : String(m.value));
   const [synced, setSynced] = useState(m.value);
@@ -57,7 +62,7 @@ export function MeasurementField({
     <div
       className={cn(
         "rounded-xl border p-3 transition-colors",
-        attention ? "border-red-300 bg-red-50/40" : "border-stone-200 bg-white",
+        attention ? "border-red-300 bg-red-50/40" : tapActive ? "border-sky-400 bg-sky-50/50" : "border-stone-200 bg-white",
       )}
       onMouseEnter={() => onHover?.(true)}
       onMouseLeave={() => onHover?.(false)}
@@ -77,6 +82,7 @@ export function MeasurementField({
           placeholder={required ? "Enter value" : "—"}
           aria-label={`${label} in ${m.unit}`}
           onChange={(e) => setText(e.target.value)}
+          onFocus={onFocus}
           onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
