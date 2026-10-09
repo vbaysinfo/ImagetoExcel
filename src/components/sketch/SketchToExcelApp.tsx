@@ -919,11 +919,18 @@ export function SketchToExcelApp() {
               </button>
             </Step>
 
-            {profile && items.length > 0 && (
+            {profile && (
               <Step n={images.some((i) => i.analysis) ? 5 : 4} title="Generate & download Excel" done={Boolean(lastFile)}>
-                <ExcelPreview items={items} profile={profile} />
+                {items.length > 0 ? (
+                  <ExcelPreview items={items} profile={profile} />
+                ) : (
+                  <p className="rounded-xl border border-dashed border-stone-300 p-4 text-sm text-stone-600">
+                    Your Excel file is created here. First add rows: tap the numbers on the drawing, use a quick-add button, or upload an Excel
+                    file to edit. Then click <b>Generate &amp; download Excel</b> — the file is saved to your Downloads folder.
+                  </p>
+                )}
 
-                {!hasData ? (
+                {items.length === 0 ? null : !hasData ? (
                   <p className="mt-4 flex gap-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     {manualMode
@@ -985,7 +992,7 @@ export function SketchToExcelApp() {
                   <p className={cn("mt-2 text-xs", dirty ? "font-medium text-amber-800" : "text-stone-500")}>
                     {dirty
                       ? "You have changed the rows since the last download — download again to get the updated file."
-                      : `${lastFile.rows} rows written into a copy of the template${lastFile.draft ? ` (draft, ${lastFile.checks} to check)` : ""}. Formulas recalculate when the file is opened.`}
+                      : `${lastFile.rows} rows written into a copy of the template${lastFile.draft ? ` (draft, ${lastFile.checks} to check)` : ""}. Saved to your Downloads folder as ${lastFile.fileName}.`}
                   </p>
                 )}
                 {generateError && (

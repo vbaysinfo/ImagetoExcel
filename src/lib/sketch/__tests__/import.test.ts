@@ -54,6 +54,6 @@ describe("blank-cell highlight", () => {
     expect(sheetXml).toContain('AND(D2="",ISNUMBER(SEARCH("CHECK",$L2)))');
     // Must precede pageMargins to keep the file valid.
     expect(sheetXml.indexOf("<conditionalFormatting")).toBeLessThan(sheetXml.indexOf("<pageMargins"));
-    expect(styles).toMatch(/<dxfs count="\d+">.*FFFFC7CE/s);
+    expect(styles).toMatch(/<dxfs count="\d+">[\s\S]*FFFFC7CE/);
   });
 });
