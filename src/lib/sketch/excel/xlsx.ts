@@ -247,6 +247,44 @@ export class XlsxSheet {
     this.dirty = true;
   }
 
+  /**
+   * Add a formula-based conditional format (e.g. highlight cells that still
+   * need a value). Inserted at the position the OOXML schema requires.
+   */
+  addConditionalFormat(sqref: string, formula: string, dxfId: number): void {
+    const root = this.doc.documentElement as unknown as Element;
+    let priority = 1;
+    for (const r of Array.from(this.doc.getElementsByTagName("cfRule"))) {
+      priority = Math.max(priority, Number(r.getAttribute("priority") ?? 0) + 1);
+    }
+    const cf = this.doc.createElementNS(MAIN_NS, "conditionalFormatting");
+    cf.setAttribute("sqref", sqref);
+    const rule = this.doc.createElementNS(MAIN_NS, "cfRule");
+    rule.setAttribute("type", "expression");
+    rule.setAttribute("dxfId", String(dxfId));
+    rule.setAttribute("priority", String(priority));
+    const f = this.doc.createElementNS(MAIN_NS, "formula");
+    f.appendChild(this.doc.createTextNode(formula));
+    rule.appendChild(f);
+    cf.appendChild(rule);
+    // Elements that must come after <conditionalFormatting>.
+    const after = [
+      "dataValidations", "hyperlinks", "printOptions", "pageMargins", "pageSetup", "headerFooter", "rowBreaks",
+      "colBreaks", "customProperties", "cellWatches", "ignoredErrors", "smartTags", "drawing", "legacyDrawing",
+      "legacyDrawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst",
+    ];
+    let before: Element | null = null;
+    for (let n = root.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 1 && after.includes((n as Element).localName ?? "")) {
+        before = n as Element;
+        break;
+      }
+    }
+    if (before) root.insertBefore(cf, before);
+    else root.appendChild(cf);
+    this.dirty = true;
+  }
+
   /** All formula cells in the sheet (refs). */
   formulaCells(): string[] {
     const out: string[] = [];
@@ -284,6 +322,7 @@ export class XlsxWorkbook {
   private sheetPaths: { name: string; path: string }[] = [];
   private strings: string[] = [];
   private styleNumFmt: string[] = [];
+  private stylesDoc: Document | null = null;
 
   private constructor(private zip: JSZip, private workbookDoc: Document) {}
 
@@ -410,9 +449,49 @@ export class XlsxWorkbook {
     }
   }
 
+  /** Add a differential style (used by conditional formats) with a solid fill; returns its id. */
+  async addFillDxf(argb: string, fontArgb?: string): Promise<number> {
+    if (!this.stylesDoc) {
+      const xml = await this.zip.file("xl/styles.xml")?.async("string");
+      if (!xml) throw new Error("The workbook has no styles part.");
+      this.stylesDoc = parseXml(xml);
+    }
+    const doc = this.stylesDoc;
+    const root = doc.documentElement as unknown as Element;
+    let dxfs = child(root, "dxfs");
+    if (!dxfs) {
+      dxfs = doc.createElementNS(MAIN_NS, "dxfs") as unknown as Element;
+      // <dxfs> follows <cellStyles>; place it before tableStyles/colors/extLst.
+      const next = child(root, "tableStyles") ?? child(root, "colors") ?? child(root, "extLst");
+      if (next) root.insertBefore(dxfs, next);
+      else root.appendChild(dxfs);
+    }
+    const dxf = doc.createElementNS(MAIN_NS, "dxf");
+    if (fontArgb) {
+      const font = doc.createElementNS(MAIN_NS, "font");
+      const color = doc.createElementNS(MAIN_NS, "color");
+      color.setAttribute("rgb", fontArgb);
+      font.appendChild(color);
+      dxf.appendChild(font);
+    }
+    const fill = doc.createElementNS(MAIN_NS, "fill");
+    const pattern = doc.createElementNS(MAIN_NS, "patternFill");
+    pattern.setAttribute("patternType", "solid");
+    const bg = doc.createElementNS(MAIN_NS, "bgColor");
+    bg.setAttribute("rgb", argb);
+    pattern.appendChild(bg);
+    fill.appendChild(pattern);
+    dxf.appendChild(fill);
+    dxfs.appendChild(dxf);
+    const count = children(dxfs, "dxf").length;
+    dxfs.setAttribute("count", String(count));
+    return count - 1;
+  }
+
   async toBuffer(): Promise<Buffer> {
     const serializer = new XMLSerializer();
     let changed = false;
+    if (this.stylesDoc) this.zip.file("xl/styles.xml", serializer.serializeToString(this.stylesDoc));
     for (const sheet of this.sheets.values()) {
       if (!sheet.dirty) continue;
       changed = true;

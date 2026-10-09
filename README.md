@@ -31,9 +31,14 @@ straight away. If anything is uncertain the file is a *draft*
 Remarks and values that could not be found are left blank. Correct them in the
 editor and download again; the final file has no CHECK notes.
 
+**Blank sizes are highlighted:** a size that is not written on the sketch is
+left blank and its row is marked `⚠ CHECK` in Remarks. In Excel those blank
+width/height cells show in red (conditional formatting) until a value is typed.
+
 **Edit an existing Excel file:** drop a generated (or hand-filled) `.xlsx` on
 the upload area. Its rows are loaded into the editor using the active
-template's mapping; change them and download the updated file.
+template's mapping; rows marked `⚠ CHECK` open highlighted so you can fill or
+confirm them, then download the updated file.
 
 ## Setup
 

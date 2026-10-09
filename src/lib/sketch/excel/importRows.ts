@@ -49,8 +49,25 @@ export async function importRows(data: Buffer, profile: TemplateProfile): Promis
     // Rooms written only on the first row of a group apply to the rows below.
     if (rowRoom) room = rowRoom;
     let remarks = text(read(cols.remarks, r));
-    // Drop the automatic "CHECK:" note from draft exports; it is recomputed.
-    remarks = remarks.replace(/\s*⚠\s*CHECK:.*$/u, "").trim();
+    // A "⚠ CHECK: …" note marks values still to be filled or confirmed.
+    // Turn it back into review flags (the note is recomputed on export).
+    const check = /⚠?\s*CHECK:?\s*(.*)$/iu.exec(remarks);
+    let question: string | null = null;
+    if (check) {
+      remarks = remarks.slice(0, check.index).trim();
+      const note = check[1].trim();
+      const lower = note.toLowerCase();
+      for (const [key, m] of [["width", width], ["height", height], ["depth", depth]] as const) {
+        const required = config.requiredFields.includes(key);
+        if (lower.includes(key) || (required && m.value === null)) {
+          m.needsReview = true;
+          m.source = m.value === null ? "missing" : "detected";
+          m.confidence = m.value === null ? 0 : 70;
+          m.issues = [m.value === null ? "Not written on the sketch — please enter it." : "Marked to check — confirm or correct it."];
+        }
+      }
+      if (note) question = `To check: ${note}`;
+    }
     items.push({
       id: `manual-import-${r}-${Math.random().toString(36).slice(2, 7)}`,
       imageIndex: 0,
@@ -61,9 +78,9 @@ export async function importRows(data: Buffer, profile: TemplateProfile): Promis
       depth,
       remarks,
       notes: [],
-      question: null,
+      question,
       region: null,
-      confirmed: true,
+      confirmed: question === null,
     });
   }
   return items;

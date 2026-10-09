@@ -91,6 +91,19 @@ export async function generateWorkbook(
     }
   }
 
+  // 5. Highlight required cells left blank on rows marked "CHECK", so they
+  //    are easy to find and fill in Excel. The highlight disappears as soon
+  //    as a value is typed (conditional formatting, not a fixed colour).
+  const { columns } = config;
+  const checkCols = config.requiredFields.map((k) => columns[k]).filter((c): c is string => Boolean(c));
+  if (columns.remarks && checkCols.length && laidOut.some((r) => /CHECK/.test(String(r.inputs[columns.remarks!] ?? "")))) {
+    const dxf = await book.addFillDxf("FFFFC7CE", "FF9C0006");
+    const first = config.firstDataRow;
+    const last = Math.max(lastUsedRow, config.lastDataRow);
+    const sqref = checkCols.map((c) => `${c}${first}:${c}${last}`).join(" ");
+    sheet.addConditionalFormat(sqref, `AND(${checkCols[0]}${first}="",ISNUMBER(SEARCH("CHECK",$${columns.remarks}${first})))`, dxf);
+  }
+
   const buffer = await book.toBuffer();
   return { buffer, rowsWritten: laidOut.length, rowsAdded, uncomputedFormulas: uncomputed };
 }
